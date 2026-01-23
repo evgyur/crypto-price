@@ -581,6 +581,14 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
     # Build sets of indices for swing coloring (only used in default mode)
     bullish_reversal_indices = set()
     bearish_reversal_indices = set()
+
+    # Always include absolute high/low candles in coloring
+    abs_high_idx = None
+    abs_low_idx = None
+    if ohlc_rows:
+        abs_high_idx = max(range(len(ohlc_rows)), key=lambda i: ohlc_rows[i][2])
+        abs_low_idx = min(range(len(ohlc_rows)), key=lambda i: ohlc_rows[i][3])
+
     if not use_gradient:
         for frac_idx, frac_type, frac_price in fractals:
             if frac_type == 'up':  # swing low = bullish reversal
@@ -591,6 +599,15 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
                 for off in range(0, 3):  # swing candle + 2 after = 3 total
                     if frac_idx + off < len(ohlc_rows):
                         bearish_reversal_indices.add(frac_idx + off)
+
+        if abs_low_idx is not None:
+            for off in range(0, 3):
+                if abs_low_idx + off < len(ohlc_rows):
+                    bullish_reversal_indices.add(abs_low_idx + off)
+        if abs_high_idx is not None:
+            for off in range(0, 3):
+                if abs_high_idx + off < len(ohlc_rows):
+                    bearish_reversal_indices.add(abs_high_idx + off)
     
     for idx, row in enumerate(ohlc_rows):
         if has_volume:
@@ -682,6 +699,27 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
             ax.annotate(f'{frac_price:.2f}', xy=(x, frac_price - offset * 1.5),
                        fontsize=8, color='white', ha='center', va='top', zorder=6)
 
+    # Always mark absolute high/low so at least one swing high/low is visible
+    if highs and lows:
+        abs_high_price = max(highs)
+        abs_low_price = min(lows)
+        abs_high_idx = highs.index(abs_high_price)
+        abs_low_idx = lows.index(abs_low_price)
+
+        abs_high_color = "#FFD54F"  # gold
+        abs_low_color = "#90CAF9"   # light blue
+
+        xh = x_vals[abs_high_idx]
+        xl = x_vals[abs_low_idx]
+
+        ax.plot(xh, abs_high_price + offset * 0.5, marker='v', color=abs_high_color, markersize=7, zorder=6)
+        ax.annotate(f'{abs_high_price:.2f}', xy=(xh, abs_high_price + offset * 1.7),
+                   fontsize=8, color='white', ha='center', va='bottom', zorder=7)
+
+        ax.plot(xl, abs_low_price - offset * 0.5, marker='^', color=abs_low_color, markersize=7, zorder=6)
+        ax.annotate(f'{abs_low_price:.2f}', xy=(xl, abs_low_price - offset * 1.7),
+                   fontsize=8, color='white', ha='center', va='top', zorder=7)
+
     # Draw volume bars
     if has_volume and ax_vol and volumes:
         for idx, vol in enumerate(volumes):
@@ -753,6 +791,40 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
     return chart_path
 
 
+def _normalize_hl_symbol(symbol):
+    sym = str(symbol or "").upper()
+    # Strip common separators (e.g., BTC-USD, BTC/USDC)
+    for sep in ("-", "/", "_"):
+        if sep in sym:
+            sym = sym.split(sep)[0]
+            break
+    # Strip common stablecoin suffixes (e.g., BTCUSDC)
+    stable_suffixes = ("USDC", "USDH", "USDE", "USD", "USDT")
+    for suf in stable_suffixes:
+        if sym.endswith(suf) and len(sym) > len(suf):
+            sym = sym[: -len(suf)]
+            break
+    return sym
+
+
+def _hyperliquid_lookup(symbol):
+    try:
+        meta, ctxs = _get_hyperliquid_meta()
+    except RuntimeError:
+        return None, None
+    universe = meta.get("universe", [])
+    mapping = {}
+    for idx, entry in enumerate(universe):
+        name = str(entry.get("name", "")).upper()
+        if name:
+            mapping[name] = idx
+    norm = _normalize_hl_symbol(symbol)
+    idx = mapping.get(norm)
+    if idx is None or idx >= len(ctxs):
+        return None, None
+    return universe[idx], ctxs[idx]
+
+
 def main():
     if len(sys.argv) < 2:
         return _json_error("missing symbol", "Usage: get_price_chart.py <symbol>")
@@ -773,7 +845,8 @@ def main():
     source = "coingecko"
     currency = "usdt"
     price_usdt = None
-    hl_meta, hl_ctx = _hyperliquid_lookup(symbol_upper)
+    hl_symbol = _normalize_hl_symbol(symbol_upper)
+    hl_meta, hl_ctx = _hyperliquid_lookup(hl_symbol)
     if hl_ctx:
         source = "hyperliquid"
         currency = "usd"
@@ -830,7 +903,7 @@ def main():
         interval_minutes = _pick_hyperliquid_interval_minutes(total_minutes)
         candle_minutes = interval_minutes
         try:
-            candles = _get_hyperliquid_candles(symbol_upper, total_minutes, interval_minutes)
+            candles = _get_hyperliquid_candles(hl_symbol, total_minutes, interval_minutes)
         except RuntimeError:
             candles = []
 
