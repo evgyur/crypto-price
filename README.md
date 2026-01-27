@@ -109,10 +109,20 @@ The script returns JSON with the following structure:
 
 - **Type**: Candlestick (OHLC)
 - **Size**: 8x8 inches (square format)
-- **Theme**: Dark (#0f141c background)
-- **Colors**: 
-  - Green (#26a69a) for bullish candles
-  - Red (#ef5350) for bearish candles
+- **Theme**: Dark (#121212 background)
+- **Colors** (default mode): 
+  - Grey (#B0B0B0 / #606060) for normal candles
+  - Cyan (#00FFFF) for bullish swing reversals (3 candles after swing low)
+  - Magenta (#FF00FF) for bearish swing reversals (3 candles after swing high)
+  - Gold (#FFD54F) / Light Blue (#90CAF9) markers for absolute high/low
+- **Colors** (gradient mode, use `gradient` flag): 
+  - Green gradient (#84dc58 → #336d16) for bullish candles
+  - Blue-purple gradient (#6c7ce4 → #544996) for bearish candles
+- **Features**:
+  - Fractal swing high/low detection (true pivots with configurable window)
+  - Volume bars (when available from API)
+  - Last price highlighted on Y-axis
+  - Tomorrow font for crisp text rendering
 - **Output**: PNG files saved to `/tmp/crypto_chart_{SYMBOL}_{timestamp}.png`
 
 ## Data Sources
