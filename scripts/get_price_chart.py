@@ -487,24 +487,60 @@ def _build_candles_from_prices(price_points, hours, candle_minutes):
     return candles
 
 
+DURATION_RE = re.compile(
+    r"^(?P<value>\d+(?:\.\d+)?)(?P<unit>months?|month|mons?|mo|weeks?|week|w|days?|day|d|hours?|hour|hrs?|hr|h|minutes?|minute|mins?|min|m|месяцев|месяца|месяц|мес|недель|недели|неделя|нед|дней|дня|день|д|часов|часа|час|ч|минут|минуты|минута|мин)?$",
+    re.IGNORECASE,
+)
+UNIT_ALIASES = {
+    # minutes
+    "m": ("m", 1), "min": ("m", 1), "mins": ("m", 1), "minute": ("m", 1), "minutes": ("m", 1),
+    "мин": ("m", 1), "минута": ("m", 1), "минуты": ("m", 1), "минут": ("m", 1),
+    # hours
+    "h": ("h", 60), "hr": ("h", 60), "hrs": ("h", 60), "hour": ("h", 60), "hours": ("h", 60),
+    "ч": ("h", 60), "час": ("h", 60), "часа": ("h", 60), "часов": ("h", 60),
+    # days
+    "d": ("d", 24 * 60), "day": ("d", 24 * 60), "days": ("d", 24 * 60),
+    "д": ("d", 24 * 60), "день": ("d", 24 * 60), "дня": ("d", 24 * 60), "дней": ("d", 24 * 60),
+    # weeks
+    "w": ("w", 7 * 24 * 60), "week": ("w", 7 * 24 * 60), "weeks": ("w", 7 * 24 * 60),
+    "нед": ("w", 7 * 24 * 60), "неделя": ("w", 7 * 24 * 60), "недели": ("w", 7 * 24 * 60), "недель": ("w", 7 * 24 * 60),
+    # months are chart periods, not calendar arithmetic: 1mo = 30d.
+    "mo": ("mo", 30 * 24 * 60), "mon": ("mo", 30 * 24 * 60), "mons": ("mo", 30 * 24 * 60),
+    "month": ("mo", 30 * 24 * 60), "months": ("mo", 30 * 24 * 60),
+    "мес": ("mo", 30 * 24 * 60), "месяц": ("mo", 30 * 24 * 60), "месяца": ("mo", 30 * 24 * 60), "месяцев": ("mo", 30 * 24 * 60),
+}
+
+
+def _format_duration_value(value):
+    return str(int(value)) if value.is_integer() else str(value)
+
+
+def _parse_duration_token(value_token, unit_token=None):
+    compact = f"{value_token}{unit_token or ''}".strip().lower()
+    match = DURATION_RE.match(compact)
+    if not match:
+        return None
+    value = float(match.group("value"))
+    unit = (match.group("unit") or "h").lower()
+    alias = UNIT_ALIASES.get(unit)
+    if not alias:
+        return None
+    label_unit, minute_multiplier = alias
+    total_minutes = max(1.0, value * minute_multiplier)
+    label = f"{_format_duration_value(value)}{label_unit}"
+    return total_minutes, label
+
+
 def _parse_duration(args):
-    for arg in args:
-        cleaned = arg.strip().lower()
-        match = re.match(r"^(\d+(?:\.\d+)?)([mhd])?$", cleaned)
-        if not match:
-            continue
-        value = float(match.group(1))
-        unit = match.group(2) or "h"
-        if unit == "m":
-            total_minutes = max(1.0, value)
-            label = f"{int(value)}m" if value.is_integer() else f"{value}m"
-        elif unit == "d":
-            total_minutes = max(1.0, value * 24 * 60)
-            label = f"{int(value)}d" if value.is_integer() else f"{value}d"
-        else:
-            total_minutes = max(1.0, value * 60)
-            label = f"{int(value)}h" if value.is_integer() else f"{value}h"
-        return total_minutes, label
+    cleaned_args = [arg.strip().lower() for arg in args if arg.strip()]
+    for idx, arg in enumerate(cleaned_args):
+        if re.match(r"^\d+(?:\.\d+)?$", arg) and idx + 1 < len(cleaned_args):
+            parsed = _parse_duration_token(arg, cleaned_args[idx + 1])
+            if parsed:
+                return parsed
+        parsed = _parse_duration_token(arg)
+        if parsed:
+            return parsed
     return float(DEFAULT_HOURS * 60), f"{DEFAULT_HOURS}h"
 
 
@@ -932,8 +968,10 @@ def main():
 
     candles.sort(key=lambda item: item[0])
     if candles:
-        target = max(2, int((hours * 60) / candle_minutes))
-        target = int(target * 0.8)  # 20% fewer candles for breathing room
+        # Keep the requested duration. Previously this intentionally trimmed
+        # the window to 80% "for breathing room", so `2h` rendered/calculated
+        # ~96 minutes while the caption still said `over 2h`.
+        target = max(2, int(math.ceil((hours * 60) / candle_minutes)) + 1)
         last_points = candles[-target:]
     else:
         last_points = []

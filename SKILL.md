@@ -21,7 +21,7 @@ Router для скилла цен и графиков крипты.
 python3 {baseDir}/scripts/get_price_chart.py <SYMBOL> [duration]
 ```
 
-Duration: формат `<число>[m|h|d]`, без суффикса = часы. Примеры: `30m`, `2h`, `3h`, `12h`, `24h`, `2d`. Default: `24h`.
+Duration: минуты/часы/дни/недели/месяцы. Компактный формат `<число>[m|h|d|w|mo]`, без суффикса = часы. Примеры: `30m`, `2h`, `3h`, `12h`, `24h`, `2d`, `1w`, `2weeks`, `1mo`, `2months`; также поддерживаются раздельные формы вроде `1 week`, `2 months`, `30 мин`, `3 часа`, `1 месяц`. Месяц считается как 30 дней. Default: `24h`.
 
 ## Router Map
 - source/duration routing -> `modules/source-routing/SKILL.md`
@@ -77,8 +77,11 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - [ ] `/opt/hermes-agent/venv/bin/python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py BTC`
 - [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 12h`
 - [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 2h` returns `duration: "2h"`, `text_plain` says `over 2h`, and `chart_path` points to an existing PNG.
+- [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 1w` returns `duration: "1w"` and a week-scale chart.
+- [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 1mo` returns `duration: "1mo"` and a month-scale chart.
+- [ ] `HERMES_COMMAND_ARGS='1 week' /opt/hermes-agent/venv/bin/python3 /home/hermes/.hermes/skills/hype/scripts/hype_quick.py` prints `over 1w` and `MEDIA:<png>`.
 - [ ] JSON содержит `price|change_period_percent|text_plain` при success
-- [ ] `chart_path` (если есть) указывает на существующий `.png`
+- [ ] For short windows like `2h`, visually verify the chart spans the requested duration, not a trimmed subset. The chart builder must not cut the requested candle window for “breathing room”; use the full duration for both change calculation and x-axis.
 - [ ] invalid symbol возвращает понятный error JSON
 
 ## Manual Review Checklist
@@ -99,3 +102,4 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - код скрипта оставлен без rename для совместимости
 - JSON должен включать и `duration`, и `duration_label`; некоторые OpenClaw command aliases and chat delivery checks look for `duration` explicitly.
 - `/hype` in OpenClaw should remain a thin alias skill that delegates to `crypto-price/scripts/get_price_chart.py HYPE [duration]`; do not duplicate pricing or charting logic in the alias.
+- Period aliases must preserve the full requested window end-to-end. A prior bug accepted `2h` and captioned `over 2h`, but then trimmed candles to 80% for chart “breathing room”, so the chart/change used ~96 minutes. Do not trim requested-duration candles; if visual padding is needed, adjust axis margins only, not data selection.
