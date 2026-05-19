@@ -102,6 +102,7 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - [ ] `HERMES_COMMAND_ARGS='1 week' /opt/hermes-agent/venv/bin/python3 /home/hermes/.hermes/skills/crypto-price/scripts/hype_quick.py` prints `over 1w` and `MEDIA:<png>`.
 - [ ] JSON содержит `price|change_period_percent|text_plain` при success
 - [ ] For short windows like `2h`, visually verify the chart spans the requested duration, not a trimmed subset. The chart builder must not cut the requested candle window for “breathing room”; use the full duration for both change calculation and x-axis.
+- [ ] If a fractal lands on the same candle as the absolute high/low, verify the chart shows only one price label for that point; absolute markers own those labels to avoid doubled text.
 - [ ] invalid symbol возвращает понятный error JSON
 
 ## Manual Review Checklist

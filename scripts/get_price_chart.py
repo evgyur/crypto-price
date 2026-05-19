@@ -716,15 +716,23 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
         lows.append(low_price)
         highs.append(high_price)
 
-    # Draw fractals (already calculated above)
+    # Draw fractals (already calculated above). If the absolute high/low is
+    # also a fractal, leave that point for the absolute marker below; otherwise
+    # matplotlib draws two near-identical price labels on the same candle.
     price_range = max(highs) - min(lows) if highs and lows else 1
     offset = price_range * 0.02
+    abs_high_price = max(highs) if highs else None
+    abs_low_price = min(lows) if lows else None
+    abs_high_idx = highs.index(abs_high_price) if abs_high_price is not None else None
+    abs_low_idx = lows.index(abs_low_price) if abs_low_price is not None else None
 
     # Fractal colors based on mode
     frac_up_color = "#84dc58" if use_gradient else "#00FFFF"
     frac_down_color = "#6c7ce4" if use_gradient else "#FF00FF"
 
     for frac_idx, frac_type, frac_price in fractals:
+        if (frac_type == 'down' and frac_idx == abs_high_idx) or (frac_type == 'up' and frac_idx == abs_low_idx):
+            continue
         x = x_vals[frac_idx]
         if frac_type == 'down':  # bearish fractal - arrow down above high
             ax.plot(x, frac_price + offset * 0.5, marker='v', color=frac_down_color, markersize=6, zorder=5)
@@ -737,10 +745,6 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
 
     # Always mark absolute high/low so at least one swing high/low is visible
     if highs and lows:
-        abs_high_price = max(highs)
-        abs_low_price = min(lows)
-        abs_high_idx = highs.index(abs_high_price)
-        abs_low_idx = lows.index(abs_low_price)
 
         abs_high_color = "#FFD54F"  # gold
         abs_low_color = "#90CAF9"   # light blue
