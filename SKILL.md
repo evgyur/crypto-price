@@ -5,6 +5,7 @@ metadata:
   clawdbot:
     emoji: 📈
     command: /crypto-price
+    aliases: [/hype]
     requires:
       bins: ["python3"]
 ---
@@ -16,10 +17,29 @@ Router для скилла цен и графиков крипты.
 ## Trigger
 Когда нужен токен прайс, изменение за период или график (`BTC`, `ETH`, `HYPE`, ...).
 
-## Command
+## Commands
+
+### `/crypto-price <SYMBOL> [duration]`
+Canonical generic command for any supported token.
+
 ```bash
 python3 {baseDir}/scripts/get_price_chart.py <SYMBOL> [duration]
 ```
+
+### `/hype [duration]`
+Built-in alias command owned by this same skill. It must remain inside `crypto-price`, not a separate `hype` skill.
+
+```bash
+python3 {baseDir}/scripts/hype_quick.py [duration]
+```
+
+The alias delegates to:
+
+```bash
+python3 {baseDir}/scripts/get_price_chart.py HYPE [duration]
+```
+
+## Command contract
 
 Duration: минуты/часы/дни/недели/месяцы. Компактный формат `<число>[m|h|d|w|mo]`, без суффикса = часы. Примеры: `30m`, `2h`, `3h`, `12h`, `24h`, `2d`, `1w`, `2weeks`, `1mo`, `2months`; также поддерживаются раздельные формы вроде `1 week`, `2 months`, `30 мин`, `3 часа`, `1 месяц`. Месяц считается как 30 дней. Default: `24h`.
 
@@ -40,7 +60,7 @@ Return ranges and label them as back-of-envelope unless the team published offic
 
 ## Quick-command aliases
 
-If a token-specific slash alias (for example `/hype`) uses Hermes `quick_commands` with `type: exec`, the alias config must forward duration arguments (`append_args: true`) or expose `HERMES_COMMAND_ARGS` to the wrapper. Otherwise `/alias 2h` can call this script without `2h` and return a default-period chart while looking superficially successful. See `hermes-agent` → `references/gateway-quick-commands.md` for the gateway mechanics.
+If a token-specific slash alias (for example `/hype`) uses Hermes `quick_commands` with `type: exec`, keep the alias inside this `crypto-price` skill and point the quick command to this skill's wrapper (`scripts/hype_quick.py`). The alias config must forward duration arguments (`append_args: true`) or expose `HERMES_COMMAND_ARGS` to the wrapper. Otherwise `/alias 2h` can call this script without `2h` and return a default-period chart while looking superficially successful. See `hermes-agent` → `references/gateway-quick-commands.md` for the gateway mechanics.
 
 ## Output Contract (обязательный)
 Всегда вернуть:
@@ -79,7 +99,7 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 2h` returns `duration: "2h"`, `text_plain` says `over 2h`, and `chart_path` points to an existing PNG.
 - [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 1w` returns `duration: "1w"` and a week-scale chart.
 - [ ] `python3 /home/hermes/.hermes/skills/crypto-price/scripts/get_price_chart.py HYPE 1mo` returns `duration: "1mo"` and a month-scale chart.
-- [ ] `HERMES_COMMAND_ARGS='1 week' /opt/hermes-agent/venv/bin/python3 /home/hermes/.hermes/skills/hype/scripts/hype_quick.py` prints `over 1w` and `MEDIA:<png>`.
+- [ ] `HERMES_COMMAND_ARGS='1 week' /opt/hermes-agent/venv/bin/python3 /home/hermes/.hermes/skills/crypto-price/scripts/hype_quick.py` prints `over 1w` and `MEDIA:<png>`.
 - [ ] JSON содержит `price|change_period_percent|text_plain` при success
 - [ ] For short windows like `2h`, visually verify the chart spans the requested duration, not a trimmed subset. The chart builder must not cut the requested candle window for “breathing room”; use the full duration for both change calculation and x-axis.
 - [ ] invalid symbol возвращает понятный error JSON
@@ -96,10 +116,15 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - [ ] If `chart_path` is returned, the PNG exists and can be attached by the chat channel.
 - [ ] Invalid symbols return structured error JSON without stack traces.
 
+## Canonical Repo / Push Notes
+- Runtime installs under `~/.hermes/skills/crypto-price` may not be git worktrees. The canonical public repo is `https://github.com/evgyur/crypto-price.git`.
+- When pushing runtime fixes, clone/sync into a clean temp checkout of that repo; preserve repo metadata like `.github/workflows`, docs, `.clawdhub`, fonts, and publish files.
+- Push the default remote branch (`origin/HEAD`; currently `master`) unless the user asks for another branch.
+
 ## Backward-Compat Map
 - legacy запуск `python3 {baseDir}/scripts/get_price_chart.py <SYMBOL> [duration]` сохранён
 - legacy описание перенесено в `references/legacy-SKILL.md`
 - код скрипта оставлен без rename для совместимости
 - JSON должен включать и `duration`, и `duration_label`; некоторые OpenClaw command aliases and chat delivery checks look for `duration` explicitly.
-- `/hype` in OpenClaw should remain a thin alias skill that delegates to `crypto-price/scripts/get_price_chart.py HYPE [duration]`; do not duplicate pricing or charting logic in the alias.
+- `/hype` in OpenClaw/Hermes must remain a thin alias command inside this same `crypto-price` skill that delegates to `crypto-price/scripts/get_price_chart.py HYPE [duration]`; do not create or maintain a separate `hype` skill.
 - Period aliases must preserve the full requested window end-to-end. A prior bug accepted `2h` and captioned `over 2h`, but then trimmed candles to 80% for chart “breathing room”, so the chart/change used ~96 minutes. Do not trim requested-duration candles; if visual padding is needed, adjust axis margins only, not data selection.
