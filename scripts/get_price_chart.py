@@ -19,6 +19,59 @@ COINGECKO_SEARCH_URL = "https://api.coingecko.com/api/v3/search?query={query}"
 COINGECKO_MARKET_CHART_URL = "https://api.coingecko.com/api/v3/coins/{id}/market_chart?vs_currency={currency}&days=1"
 COINGECKO_MARKET_CHART_DAYS_URL = "https://api.coingecko.com/api/v3/coins/{id}/market_chart?vs_currency={currency}&days={days}"
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range}&interval={interval}"
+
+YAHOO_SYMBOL_MAP = {
+    "SILVER": "SI=F",
+    "XAG": "SI=F",
+    "XAGUSD": "SI=F",
+    "GOLD": "GC=F",
+    "XAU": "GC=F",
+    "XAUUSD": "GC=F",
+    "OIL": "CL=F",
+    "WTI": "CL=F",
+    "BRENT": "BZ=F",
+    "NATGAS": "NG=F",
+    "COPPER": "HG=F",
+    "SPX": "^GSPC",
+    "SP500": "^GSPC",
+    "S&P500": "^GSPC",
+    "NDX": "^NDX",
+    "NASDAQ": "^IXIC",
+    "DXY": "DX-Y.NYB",
+    "VIX": "^VIX",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDJPY": "JPY=X",
+    "USDRUB": "RUB=X",
+}
+
+HIP3_ALIAS_MAP = {
+    "SPX": "SP500",
+    "SPY": "SP500",
+    "SNP": "SP500",
+    "S&P500": "SP500",
+    "NASDAQ": "XYZ100",
+    "NDX": "XYZ100",
+    "NAS100": "XYZ100",
+    "US100": "XYZ100",
+    "OIL": "CL",
+    "WTI": "CL",
+    "CRUDE": "CL",
+    "BRENT": "BRENTOIL",
+    "XAU": "GOLD",
+    "XAUUSD": "GOLD",
+    "XAG": "SILVER",
+    "XAGUSD": "SILVER",
+    "GAS": "NATGAS",
+    "NG": "NATGAS",
+    "NIKKEI": "JP225",
+    "NI225": "JP225",
+    "KOSPI": "KR200",
+    "KOSPI200": "KR200",
+    "BRAZIL": "IBOV",
+    "BOVESPA": "IBOV",
+}
 
 TOKEN_ID_MAP = {
     "HYPE": "hyperliquid",
@@ -188,12 +241,16 @@ def _get_market_chart(token_id, currency, days):
     return data
 
 
-def _get_hyperliquid_meta():
-    cache_path = _cache_path("hyperliquid_meta", "meta")
+def _get_hyperliquid_meta(dex=None):
+    dex_key = str(dex or "main").replace(":", "-")
+    cache_path = _cache_path("hyperliquid_meta", dex_key)
     cached = _read_cache(cache_path, CACHE_TTL_SEC)
     if cached is not None:
         return cached
-    data = _post_json(HYPERLIQUID_INFO_URL, {"type": "metaAndAssetCtxs"})
+    payload = {"type": "metaAndAssetCtxs"}
+    if dex:
+        payload["dex"] = dex
+    data = _post_json(HYPERLIQUID_INFO_URL, payload)
     _write_cache(cache_path, data)
     return data
 
@@ -253,7 +310,7 @@ def _get_hyperliquid_candles(symbol, total_minutes, interval_minutes):
     payload = {
         "type": "candleSnapshot",
         "req": {
-            "coin": symbol.upper(),
+            "coin": symbol if ":" in str(symbol) else str(symbol).upper(),
             "interval": _interval_minutes_to_str(interval_minutes),
             "startTime": start_ms,
             "endTime": now_ms,
@@ -274,12 +331,16 @@ def _get_hyperliquid_candles(symbol, total_minutes, interval_minutes):
     return candles
 
 
-def _get_hyperliquid_meta():
-    cache_path = _cache_path("hyperliquid_meta", "meta")
+def _get_hyperliquid_meta(dex=None):
+    dex_key = str(dex or "main").replace(":", "-")
+    cache_path = _cache_path("hyperliquid_meta", dex_key)
     cached = _read_cache(cache_path, CACHE_TTL_SEC)
     if cached is not None:
         return cached
-    data = _post_json(HYPERLIQUID_INFO_URL, {"type": "metaAndAssetCtxs"})
+    payload = {"type": "metaAndAssetCtxs"}
+    if dex:
+        payload["dex"] = dex
+    data = _post_json(HYPERLIQUID_INFO_URL, payload)
     _write_cache(cache_path, data)
     return data
 
@@ -339,7 +400,7 @@ def _get_hyperliquid_candles(symbol, total_minutes, interval_minutes):
     payload = {
         "type": "candleSnapshot",
         "req": {
-            "coin": symbol.upper(),
+            "coin": symbol if ":" in str(symbol) else str(symbol).upper(),
             "interval": _interval_minutes_to_str(interval_minutes),
             "startTime": start_ms,
             "endTime": now_ms,
@@ -433,6 +494,88 @@ def _search_token_id(symbol):
 
     matches.sort(key=_rank_key)
     return matches[0].get("id")
+
+
+
+def _yahoo_ticker_for(symbol):
+    sym = str(symbol or "").upper().strip()
+    if not sym:
+        return None
+    if sym in YAHOO_SYMBOL_MAP:
+        return YAHOO_SYMBOL_MAP[sym]
+    # Accept explicit Yahoo tickers: AAPL, TSLA, ^GSPC, SI=F, EURUSD=X.
+    if re.match(r"^[A-Z0-9.^=-]{1,18}$", sym):
+        return sym
+    return None
+
+
+def _yahoo_range_interval(total_minutes):
+    days = max(1, int(math.ceil(total_minutes / 1440.0)))
+    if total_minutes <= 7 * 1440:
+        return f"{days}d", "15m"
+    if total_minutes <= 60 * 1440:
+        return f"{days}d", "1h"
+    if days <= 730:
+        return f"{days}d", "1d"
+    return "5y", "1wk"
+
+
+def _get_yahoo_chart(symbol, total_minutes):
+    ticker = _yahoo_ticker_for(symbol)
+    if not ticker:
+        return None
+    range_value, interval = _yahoo_range_interval(total_minutes)
+    url = YAHOO_CHART_URL.format(
+        ticker=urllib.parse.quote(ticker, safe=""),
+        range=range_value,
+        interval=interval,
+    )
+    try:
+        data = _fetch_json(url)
+        result = (data.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return None
+        meta = result.get("meta", {})
+        timestamps = result.get("timestamp") or []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+        candles = []
+        for idx, ts in enumerate(timestamps):
+            try:
+                o = opens[idx]
+                h = highs[idx]
+                l = lows[idx]
+                c = closes[idx]
+            except IndexError:
+                continue
+            if o is None or h is None or l is None or c is None:
+                continue
+            vol = 0.0
+            if idx < len(volumes) and volumes[idx] is not None:
+                try:
+                    vol = float(volumes[idx])
+                except (TypeError, ValueError):
+                    vol = 0.0
+            candles.append((int(ts) * 1000, float(o), float(h), float(l), float(c), vol))
+        price = meta.get("regularMarketPrice")
+        if price is None and candles:
+            price = candles[-1][4]
+        if price is None:
+            return None
+        return {
+            "ticker": ticker,
+            "price": float(price),
+            "currency": str(meta.get("currency") or "USD").lower(),
+            "candles": candles,
+            "interval": interval,
+            "range": range_value,
+        }
+    except Exception:
+        return None
 
 
 def _format_price(value):
@@ -831,6 +974,52 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
     return chart_path
 
 
+
+def _get_hyperliquid_perp_dexs():
+    cache_path = _cache_path("hyperliquid_perp_dexs", "all")
+    cached = _read_cache(cache_path, CACHE_TTL_SEC)
+    if cached is not None:
+        return cached
+    data = _post_json(HYPERLIQUID_INFO_URL, {"type": "perpDexs"})
+    _write_cache(cache_path, data)
+    return data
+
+
+def _iter_hyperliquid_dex_names():
+    try:
+        dexes = _get_hyperliquid_perp_dexs()
+    except RuntimeError:
+        return []
+    names = []
+    for dex in dexes:
+        if isinstance(dex, dict) and dex.get("name"):
+            names.append(str(dex["name"]))
+    return names
+
+
+def _find_hip3_symbol(symbol):
+    """Return (dex, full_symbol) for HIP-3 markets, e.g. ("xyz", "xyz:SILVER")."""
+    raw = str(symbol or "").strip()
+    if not raw:
+        return None, None
+    if ":" in raw:
+        dex, coin = raw.split(":", 1)
+        return dex.lower(), f"{dex.lower()}:{coin.upper()}"
+    norm = _normalize_hl_symbol(raw)
+    norm = HIP3_ALIAS_MAP.get(norm, norm)
+    for dex in _iter_hyperliquid_dex_names():
+        try:
+            meta, ctxs = _get_hyperliquid_meta(dex=dex)
+        except RuntimeError:
+            continue
+        for entry in meta.get("universe", []):
+            name = str(entry.get("name", ""))
+            short = name.split(":", 1)[-1].upper()
+            if short == norm or name.upper() == norm:
+                return dex, name
+    return None, None
+
+
 def _normalize_hl_symbol(symbol):
     sym = str(symbol or "").upper()
     # Strip common separators (e.g., BTC-USD, BTC/USDC)
@@ -848,10 +1037,12 @@ def _normalize_hl_symbol(symbol):
 
 
 def _hyperliquid_lookup(symbol):
+    # Main perps first. If not found, search HIP-3 perp dexes and return the
+    # fully qualified market name, e.g. xyz:SILVER.
     try:
         meta, ctxs = _get_hyperliquid_meta()
     except RuntimeError:
-        return None, None
+        meta, ctxs = {"universe": []}, []
     universe = meta.get("universe", [])
     mapping = {}
     for idx, entry in enumerate(universe):
@@ -859,10 +1050,24 @@ def _hyperliquid_lookup(symbol):
         if name:
             mapping[name] = idx
     norm = _normalize_hl_symbol(symbol)
+    norm = HIP3_ALIAS_MAP.get(norm, norm)
     idx = mapping.get(norm)
-    if idx is None or idx >= len(ctxs):
-        return None, None
-    return universe[idx], ctxs[idx]
+    if idx is not None and idx < len(ctxs):
+        return universe[idx], ctxs[idx]
+
+    dex, full_symbol = _find_hip3_symbol(symbol)
+    if dex and full_symbol:
+        try:
+            hmeta, hctxs = _get_hyperliquid_meta(dex=dex)
+        except RuntimeError:
+            return None, None
+        for hidx, entry in enumerate(hmeta.get("universe", [])):
+            if str(entry.get("name", "")).upper() == full_symbol.upper() and hidx < len(hctxs):
+                enriched = dict(entry)
+                enriched["hip3_dex"] = dex
+                enriched["hip3_symbol"] = full_symbol
+                return enriched, hctxs[hidx]
+    return None, None
 
 
 def main():
@@ -885,15 +1090,31 @@ def main():
     source = "coingecko"
     currency = "usdt"
     price_usdt = None
+    external_candles = []
     hl_symbol = _normalize_hl_symbol(symbol_upper)
-    hl_meta, hl_ctx = _hyperliquid_lookup(hl_symbol)
+    hl_meta, hl_ctx = _hyperliquid_lookup(symbol_upper)
+    if hl_meta and hl_meta.get("hip3_symbol"):
+        hl_symbol = hl_meta["hip3_symbol"]
     if hl_ctx:
         source = "hyperliquid"
+        token_id = hl_symbol
         currency = "usd"
         try:
             price_usdt = float(hl_ctx.get("markPx") or hl_ctx.get("midPx"))
         except (TypeError, ValueError):
             price_usdt = None
+
+    # Traditional assets and explicit Yahoo tickers should not be routed to
+    # random CoinGecko meme tokens with the same symbol/name (e.g. SILVER).
+    if price_usdt is None and (symbol_upper in YAHOO_SYMBOL_MAP or "=" in symbol_upper or symbol_upper.startswith("^")):
+        yahoo = _get_yahoo_chart(symbol_upper, total_minutes)
+        if yahoo:
+            source = "yahoo"
+            token_id = yahoo["ticker"]
+            currency = yahoo["currency"]
+            price_usdt = yahoo["price"]
+            external_candles = yahoo["candles"]
+
     if price_usdt is None:
         try:
             price_payload = _get_price(token_id, currency)
@@ -935,9 +1156,17 @@ def main():
                     price_usdt = price_entry.get(currency)
 
     if price_usdt is None:
-        return _json_error("token not found", f"CoinGecko id: {token_id}")
+        yahoo = _get_yahoo_chart(symbol_upper, total_minutes)
+        if yahoo:
+            source = "yahoo"
+            token_id = yahoo["ticker"]
+            currency = yahoo["currency"]
+            price_usdt = yahoo["price"]
+            external_candles = yahoo["candles"]
+        else:
+            return _json_error("token not found", f"Hyperliquid/CoinGecko/Yahoo lookup failed for: {raw_symbol}")
 
-    candles = []
+    candles = list(external_candles)
     candle_minutes = _pick_candle_minutes(total_minutes)
     if source == "hyperliquid":
         interval_minutes = _pick_hyperliquid_interval_minutes(total_minutes)

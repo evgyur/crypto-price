@@ -20,10 +20,19 @@ Router для скилла цен и графиков крипты.
 ## Commands
 
 ### `/crypto-price <SYMBOL> [duration]`
-Canonical generic command for any supported token.
+Canonical generic command for any supported token/asset.
 
 ```bash
 python3 {baseDir}/scripts/get_price_chart.py <SYMBOL> [duration]
+```
+
+Source routing is Hyperliquid-first for all live perp symbols from `metaAndAssetCtxs`, then CoinGecko for crypto tokens, then Yahoo Finance for traditional tickers/aliases (`SILVER`→`SI=F`, `GOLD`→`GC=F`, `SPX`→`^GSPC`, FX, stocks/ETFs when a Yahoo ticker is supplied).
+
+### `/price <SYMBOL> [duration]`
+Quick command wrapper for Telegram/gateway. Prints text + verify + `MEDIA:<png>`.
+
+```bash
+python3 {baseDir}/scripts/price_quick.py <SYMBOL> [duration]
 ```
 
 ### `/hype [duration]`
@@ -47,7 +56,22 @@ Duration: минуты/часы/дни/недели/месяцы. Компакт
 - source/duration routing -> `modules/source-routing/SKILL.md`
 - data fetch + chart artifact -> `modules/price-chart/SKILL.md`
 - failures/rate-limit handling -> `modules/ops-fallback/SKILL.md`
+- Hyperliquid live symbol snapshot -> `references/hyperliquid-symbol-map.md`
+- HIP-3 / TradeXYZ ticker meanings -> `references/hip3-tradexyz-tickers.md`
 - protocol revenue / stablecoin yield claim checks -> `references/protocol-revenue-yield-checks.md`
+
+## HIP-3 routing pitfall
+
+Do not conclude that a non-crypto asset is absent from Hyperliquid after checking only the default perp universe (`metaAndAssetCtxs`) and spot universe (`spotMetaAndAssetCtxs`). HIP-3 builder-deployed markets live under perp dex names and use fully-qualified symbols like `xyz:SILVER`.
+
+Correct lookup order for `/price <symbol>`:
+1. Check default Hyperliquid perps.
+2. Query `perpDexs` to discover HIP-3 dexes.
+3. For each dex, query `metaAndAssetCtxs` with `dex=<name>` and match the market name or alias.
+4. Query candles with the full `dex:ticker` coin string, e.g. `xyz:SILVER`, not bare `SILVER`.
+5. Only then fall back to CoinGecko/Yahoo.
+
+Alias examples from TradeXYZ/HIP-3: `SILVER`→`xyz:SILVER`, `GOLD`→`xyz:GOLD`, `SPX`/`SP500`→`xyz:SP500`, `NASDAQ`/`NDX`→`xyz:XYZ100`, `WTI`→`xyz:CL`, `BRENT`→`xyz:BRENTOIL`. See `references/hip3-tradexyz-tickers.md` before changing source routing.
 
 ## Protocol revenue / yield claim verification
 
@@ -76,7 +100,17 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 - В Telegram и других чат-каналах с вложениями отправляй график через `message` tool как файл (`filePath`/`path` = `chart_path`).
 - После `message action=send` отвечай только `NO_REPLY`, чтобы не было дубля.
 - Не полагайся на `MEDIA:` для файлов из `/tmp` в Telegram, это может не прикрепиться.
+- Если доступный Telegram sender поддерживает только текст с `MEDIA:<path>` (например `send_message` без отдельного `filePath`), сначала скопируй PNG из `/tmp` в устойчивый путь вроде `/home/hermes/workspace/artifacts/crypto_chart_<SYMBOL>_<ts>.png`, проверь `test -s`/размер, затем отправь `MEDIA:<persistent_path>`. Если текст+media одним сообщением таймаутится, отправь сначала короткий caption/verify, затем отдельное media-сообщение, и всё равно финаль `NO_REPLY`.
 - `MEDIA:` оставляй только как запасной вариант для web/local render, когда `message` tool не нужен.
+
+### Duplicate-output triage
+If user shows a duplicated caption (`HYPE...` + `verify...` repeated under one chart), do not start by rewriting the price script. First check layers:
+1. Run `python3 scripts/get_price_chart.py HYPE <duration>` and confirm JSON contains one `text_plain`, one `verify`, and one `chart_path`.
+2. If script output is not duplicated, cause is almost certainly delivery layer: caption + follow-up text, `MEDIA:` + final response, or missing `NO_REPLY` after `message` tool.
+3. Verify the Telegram shape with an exact message fetch when possible. If message A has `has_media=true`/photo and the price text as caption, and message B has `has_media=false` with the same text, this is OpenClaw delivery dedupe treating `text+media` and final `text-only` as different payloads.
+4. For OpenClaw, inspect `reply-delivery.ts`, `agent-runner-payloads.ts`, and `block-reply-pipeline.ts`; the durable fix is to suppress a later text-only final payload when the same text was already delivered as a media caption. See `references/openclaw-media-caption-dedupe.md`.
+5. Check transcript/session JSONL: if toolResult is single but Telegram send/assistant response is double — fix gateway/skill delivery instructions, not price calculation.
+6. For live Claw additionally check logs around user message: memory-compaction/tool allowlist failures can surface as duplicate diagnostic replies but are a separate gateway/tool-policy issue.
 
 ## Setup / dependency check
 - Chart rendering imports `matplotlib` inside `_build_chart`. If JSON returns `chart_path: null` while candles exist, first verify the Python environment used by the gateway/quick command:
@@ -120,7 +154,9 @@ If a token-specific slash alias (for example `/hype`) uses Hermes `quick_command
 ## Canonical Repo / Push Notes
 - Runtime installs under `~/.hermes/skills/crypto-price` may not be git worktrees. The canonical public repo is `https://github.com/evgyur/crypto-price.git`.
 - When pushing runtime fixes, clone/sync into a clean temp checkout of that repo; preserve repo metadata like `.github/workflows`, docs, `.clawdhub`, fonts, and publish files.
+- Prefer a surgical patch in the clean checkout over copying the whole runtime file; runtime files may contain whitespace/local drift that would pollute the canonical diff.
 - Push the default remote branch (`origin/HEAD`; currently `master`) unless the user asks for another branch.
+- After push, verify `git ls-remote`/remote-head match and, if GitHub Actions are configured, poll the latest workflow run until `success` or report the failure explicitly.
 
 ## Backward-Compat Map
 - legacy запуск `python3 {baseDir}/scripts/get_price_chart.py <SYMBOL> [duration]` сохранён
