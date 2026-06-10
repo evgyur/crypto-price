@@ -6,11 +6,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.9'
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pytest
       - name: Test script
-        run: python3 scripts/get_price_chart.py BTC
+        run: |
+          python3 -m pytest tests/ -q
+          python3 scripts/get_price_chart.py BTC
+          python3 scripts/get_price_chart.py spaghetti SP500 GOLD SILVER 6mo

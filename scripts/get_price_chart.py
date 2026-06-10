@@ -1070,11 +1070,333 @@ def _hyperliquid_lookup(symbol):
     return None, None
 
 
+
+SPAGHETTI_COMMANDS = {"spaghetti", "compare", "multi", "basket"}
+SPAGHETTI_FLAG_TOKENS = {"gradient", "grad", "-g", "--gradient"}
+
+
+def _parse_spaghetti_args(args):
+    """Parse `spaghetti SYMBOL... DURATION` arguments."""
+    cleaned = [str(arg).strip() for arg in args if str(arg).strip()]
+    use_gradient = any(arg.lower() in SPAGHETTI_FLAG_TOKENS for arg in cleaned)
+    value_tokens = [arg for arg in cleaned if arg.lower() not in SPAGHETTI_FLAG_TOKENS]
+    total_minutes, label = _parse_duration(value_tokens)
+
+    symbols = []
+    skip_next = False
+    for idx, arg in enumerate(value_tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        lower = arg.lower()
+        parsed = None
+        if re.match(r"^\d+(?:\.\d+)?$", lower) and idx + 1 < len(value_tokens):
+            parsed = _parse_duration_token(lower, value_tokens[idx + 1].lower())
+            if parsed:
+                skip_next = True
+        if parsed is None:
+            parsed = _parse_duration_token(lower)
+        if parsed:
+            continue
+        for piece in re.split(r"[,;+]", arg):
+            piece = piece.strip()
+            if piece:
+                symbols.append(piece.upper())
+    # Preserve order, remove duplicates.
+    deduped = []
+    seen = set()
+    for symbol in symbols:
+        if symbol not in seen:
+            seen.add(symbol)
+            deduped.append(symbol)
+    return deduped, total_minutes, label, use_gradient
+
+
+def _normalise_close_series(candles):
+    if not candles:
+        return []
+    closes = []
+    for row in candles:
+        if len(row) < 5:
+            continue
+        try:
+            closes.append((int(row[0]), float(row[4])))
+        except (TypeError, ValueError):
+            continue
+    if not closes:
+        return []
+    base = closes[0][1]
+    if not base:
+        return []
+    return [(ts_ms, round(((close / base) - 1.0) * 100.0, 10)) for ts_ms, close in closes]
+
+
+def _asset_chart_data(raw_symbol, total_minutes):
+    symbol_upper = str(raw_symbol or "").strip().upper()
+    if not symbol_upper:
+        return None
+    token_id = TOKEN_ID_MAP.get(symbol_upper) or symbol_upper.lower()
+    source = "coingecko"
+    currency = "usdt"
+    price = None
+    candles = []
+    hl_symbol = _normalize_hl_symbol(symbol_upper)
+    hl_meta, hl_ctx = _hyperliquid_lookup(symbol_upper)
+    if hl_meta and hl_meta.get("hip3_symbol"):
+        hl_symbol = hl_meta["hip3_symbol"]
+    if hl_ctx:
+        source = "hyperliquid"
+        token_id = hl_symbol
+        currency = "usd"
+        try:
+            price = float(hl_ctx.get("markPx") or hl_ctx.get("midPx"))
+        except (TypeError, ValueError):
+            price = None
+
+    if price is None and (symbol_upper in YAHOO_SYMBOL_MAP or "=" in symbol_upper or symbol_upper.startswith("^")):
+        yahoo = _get_yahoo_chart(symbol_upper, total_minutes)
+        if yahoo:
+            source = "yahoo"
+            token_id = yahoo["ticker"]
+            currency = yahoo["currency"]
+            price = yahoo["price"]
+            candles = yahoo["candles"]
+
+    if price is None:
+        try:
+            price_payload = _get_price(token_id, currency)
+            price_entry = price_payload.get(token_id, {})
+            price = price_entry.get(currency)
+        except RuntimeError:
+            price = None
+        if price is None:
+            currency = "usd"
+            try:
+                price_payload = _get_price(token_id, currency)
+                price_entry = price_payload.get(token_id, {})
+                price = price_entry.get(currency)
+            except RuntimeError:
+                price = None
+        if price is None and token_id == symbol_upper.lower():
+            try:
+                searched_id = _search_token_id(symbol_upper)
+            except RuntimeError:
+                searched_id = None
+            if searched_id:
+                token_id = searched_id
+                for try_currency in ("usdt", "usd"):
+                    currency = try_currency
+                    try:
+                        price_payload = _get_price(token_id, currency)
+                        price_entry = price_payload.get(token_id, {})
+                        price = price_entry.get(currency)
+                    except RuntimeError:
+                        price = None
+                    if price is not None:
+                        break
+
+    if price is None:
+        yahoo = _get_yahoo_chart(symbol_upper, total_minutes)
+        if yahoo:
+            source = "yahoo"
+            token_id = yahoo["ticker"]
+            currency = yahoo["currency"]
+            price = yahoo["price"]
+            candles = yahoo["candles"]
+        else:
+            return None
+
+    candle_minutes = _pick_candle_minutes(total_minutes)
+    if source == "hyperliquid":
+        interval_minutes = _pick_hyperliquid_interval_minutes(total_minutes)
+        candle_minutes = interval_minutes
+        try:
+            candles = _get_hyperliquid_candles(hl_symbol, total_minutes, interval_minutes)
+        except RuntimeError:
+            candles = []
+
+    hours = total_minutes / 60.0
+    if not candles:
+        try:
+            days = max(1, int(math.ceil(total_minutes / 1440.0)))
+            days = min(days, 365)
+            chart_payload = _get_market_chart(token_id, currency, days)
+            candles = _build_candles_from_prices(chart_payload.get("prices", []), hours, candle_minutes)
+        except RuntimeError:
+            candles = []
+    if not candles:
+        try:
+            ohlc_payload = _get_ohlc(token_id, currency)
+        except RuntimeError:
+            ohlc_payload = []
+        for row in ohlc_payload:
+            if len(row) >= 5:
+                candles.append(tuple(row[:5]))
+
+    candles.sort(key=lambda item: item[0])
+    if candles:
+        target = max(2, int(math.ceil((hours * 60) / candle_minutes)) + 1)
+        candles = candles[-target:]
+    series = _normalise_close_series(candles)
+    if not series:
+        return None
+    first_close = candles[0][4]
+    last_close = candles[-1][4]
+    change_percent = ((last_close / first_close) - 1.0) * 100.0 if first_close else None
+    return {
+        "symbol": symbol_upper,
+        "token_id": token_id,
+        "source": source,
+        "currency": str(currency).upper(),
+        "price": price,
+        "candle_minutes": candle_minutes,
+        "candles": candles,
+        "series": series,
+        "change_period_percent": change_percent,
+    }
+
+
+def _build_spaghetti_chart(series_by_symbol, label, output_dir="/tmp", use_gradient=False):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        import matplotlib.font_manager as fm
+
+        font_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'fonts', 'Tomorrow.ttf')
+        if os.path.exists(font_path):
+            fm.fontManager.addfont(font_path)
+            plt.rcParams['font.family'] = fm.FontProperties(fname=font_path).get_name()
+    except Exception:
+        return None
+    if not series_by_symbol:
+        return None
+
+    fig, ax = plt.subplots(figsize=(10, 7), facecolor="#121212")
+    ax.set_facecolor("#121212")
+    palette = ["#FFD54F", "#90CAF9", "#FF6B9A", "#84dc58", "#B388FF", "#4DD0E1", "#FFB74D"]
+    if use_gradient:
+        palette = ["#84dc58", "#6c7ce4", "#ff66cc", "#ffd166", "#06d6a0", "#118ab2"]
+
+    end_values = []
+    for idx, (symbol, points) in enumerate(series_by_symbol.items()):
+        if not points:
+            continue
+        xs = [mdates.date2num(_timestamp_to_datetime(ts)) for ts, _val in points]
+        ys = [float(val) for _ts, val in points]
+        color = palette[idx % len(palette)]
+        ax.plot(xs, ys, color=color, linewidth=2.2, label=symbol, zorder=3)
+        ax.scatter(xs[-1], ys[-1], color=color, s=26, zorder=4)
+        end_values.append((ys[-1], symbol, color, xs[-1]))
+
+    ax.axhline(0, color="#8b949e", linestyle="--", linewidth=0.9, alpha=0.7, zorder=2)
+    ax.set_title(f"Spaghetti chart · normalized % change · last {label}", loc="center", fontsize=14, color="white", fontweight="bold", pad=14)
+    ax.set_ylabel("% from period start", color="#8b949e")
+    ax.set_xlabel("Time (UTC)", color="#8b949e")
+    ax.tick_params(axis="x", colors="#8b949e", labelrotation=0)
+    ax.tick_params(axis="y", colors="#8b949e")
+    for spine in ax.spines.values():
+        spine.set_color("#2a2f38")
+    ax.grid(True, linestyle="-", linewidth=0.6, color="#1f2630", alpha=0.85, zorder=1)
+    locator = mdates.AutoDateLocator(minticks=5, maxticks=9)
+    formatter = mdates.ConciseDateFormatter(locator)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    ax.legend(loc="upper left", facecolor="#0f141c", edgecolor="#2a2f38", labelcolor="white")
+
+    # Label final values with slight vertical offsets to reduce overlap.
+    end_values.sort(key=lambda item: item[0])
+    if end_values:
+        y_min, y_max = ax.get_ylim()
+        bump = max((y_max - y_min) * 0.025, 0.5)
+        adjusted = []
+        for y, symbol, color, x in end_values:
+            y_adj = y
+            if adjusted and y_adj - adjusted[-1] < bump:
+                y_adj = adjusted[-1] + bump
+            adjusted.append(y_adj)
+            sign = "+" if y >= 0 else ""
+            ax.annotate(
+                f"{symbol} {sign}{y:.1f}%",
+                xy=(x, y_adj),
+                xytext=(8, 0),
+                textcoords="offset points",
+                fontsize=9,
+                color=color,
+                ha="left",
+                va="center",
+                fontweight="bold",
+                zorder=5,
+            )
+
+    os.makedirs(output_dir, exist_ok=True)
+    safe = "_".join(re.sub(r"[^A-Z0-9]+", "", sym.upper()) for sym in series_by_symbol)
+    chart_path = os.path.join(output_dir, f"spaghetti_{safe}_{int(time.time())}.png")
+    fig.tight_layout()
+    fig.savefig(chart_path, dpi=150)
+    plt.close(fig)
+    return chart_path
+
+
+def _handle_spaghetti_command(args):
+    symbols, total_minutes, label, use_gradient = _parse_spaghetti_args(args)
+    if len(symbols) < 2:
+        return _json_error("missing symbols", "Usage: get_price_chart.py spaghetti <SYMBOL...> [duration]")
+    data = []
+    series_by_symbol = {}
+    missing = []
+    for symbol in symbols:
+        item = _asset_chart_data(symbol, total_minutes)
+        if not item:
+            missing.append(symbol)
+            continue
+        data.append(item)
+        series_by_symbol[item["symbol"]] = item["series"]
+    if len(series_by_symbol) < 2:
+        return _json_error("not enough series", f"Need at least two valid symbols; missing: {', '.join(missing) or 'n/a'}")
+    chart_path = _build_spaghetti_chart(series_by_symbol, label, use_gradient=use_gradient)
+    parts = []
+    for item in data:
+        change = item.get("change_period_percent")
+        sign = "+" if change is not None and change >= 0 else ""
+        parts.append(f"{item['symbol']} {sign}{change:.2f}%" if change is not None else f"{item['symbol']} n/a")
+    text = f"Spaghetti {', '.join(series_by_symbol.keys())} over {label}: " + " · ".join(parts)
+    result = {
+        "type": "spaghetti",
+        "symbols": list(series_by_symbol.keys()),
+        "duration": label,
+        "duration_label": label,
+        "source": "mixed",
+        "series": [
+            {
+                "symbol": item["symbol"],
+                "token_id": item["token_id"],
+                "source": item["source"],
+                "currency": item["currency"],
+                "price": item["price"],
+                "change_period_percent": item["change_period_percent"],
+            }
+            for item in data
+            if item["symbol"] in series_by_symbol
+        ],
+        "missing": missing,
+        "chart_path": chart_path,
+        "text": text,
+        "text_plain": text,
+    }
+    print(json.dumps(result, ensure_ascii=True))
+    return 0
+
 def main():
     if len(sys.argv) < 2:
         return _json_error("missing symbol", "Usage: get_price_chart.py <symbol>")
 
-    raw_symbol = sys.argv[1].strip()
+    first_arg = sys.argv[1].strip()
+    if first_arg.lower() in SPAGHETTI_COMMANDS:
+        return _handle_spaghetti_command(sys.argv[2:])
+
+    raw_symbol = first_arg
     if not raw_symbol:
         return _json_error("missing symbol", "Usage: get_price_chart.py <symbol>")
 

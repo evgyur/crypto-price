@@ -35,6 +35,16 @@ Quick command wrapper for Telegram/gateway. Prints text + verify + `MEDIA:<png>`
 python3 {baseDir}/scripts/price_quick.py <SYMBOL> [duration]
 ```
 
+### `/spaghetti <SYMBOL...> [duration]`
+Multi-asset normalized line chart. Use for comparing assets over the same period, e.g. SP500 vs GOLD vs SILVER for 6 months. It normalizes every series to 0% at the first candle and plots % change, so different units/prices are comparable.
+
+```bash
+python3 {baseDir}/scripts/get_price_chart.py spaghetti SP500 GOLD SILVER 6mo
+python3 {baseDir}/scripts/spaghetti_quick.py SP500 GOLD SILVER 6mo
+```
+
+Aliases: `compare`, `multi`, `basket` are accepted as the first script command. Use comma input too: `SP500,GOLD,SILVER 6mo`.
+
 ### `/hype [duration]`
 Built-in alias command owned by this same skill. It must remain inside `crypto-price`, not a separate `hype` skill.
 
@@ -163,5 +173,7 @@ If user shows a duplicated caption (`HYPE...` + `verify...` repeated under one c
 - legacy описание перенесено в `references/legacy-SKILL.md`
 - код скрипта оставлен без rename для совместимости
 - JSON должен включать и `duration`, и `duration_label`; некоторые OpenClaw command aliases and chat delivery checks look for `duration` explicitly.
+- `scripts/price_quick.py`: generic `/price <SYMBOL> [duration]` wrapper; parses argv and `HERMES_COMMAND_ARGS`, prints `text_plain`, verify line, and `MEDIA:<png>`.
+- `scripts/spaghetti_quick.py`: `/spaghetti <SYMBOL...> [duration]` wrapper for normalized multi-asset comparison charts; default is `SP500 GOLD SILVER 6mo`.
 - `/hype` in OpenClaw/Hermes must remain a thin alias command inside this same `crypto-price` skill that delegates to `crypto-price/scripts/get_price_chart.py HYPE [duration]`; do not create or maintain a separate `hype` skill.
 - Period aliases must preserve the full requested window end-to-end. A prior bug accepted `2h` and captioned `over 2h`, but then trimmed candles to 80% for chart “breathing room”, so the chart/change used ~96 minutes. Do not trim requested-duration candles; if visual padding is needed, adjust axis margins only, not data selection.
