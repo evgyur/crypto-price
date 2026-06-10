@@ -697,11 +697,29 @@ def _pick_candle_minutes(total_minutes):
     return 60
 
 
+CHART_WATERMARK = "Telegram: @human20"
+
+
 def _timestamp_to_datetime(ts_value):
     ts = float(ts_value)
     if ts >= 1e12:
         ts = ts / 1000.0
     return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+def _add_chart_watermark(fig):
+    """Draw the public Telegram attribution in the bottom-right corner."""
+    fig.text(
+        0.985,
+        0.018,
+        CHART_WATERMARK,
+        ha="right",
+        va="bottom",
+        color="#f2f5f8",
+        fontsize=10,
+        alpha=0.96,
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "#0f141c", "edgecolor": "#2a2f38", "alpha": 0.82},
+    )
 
 
 def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
@@ -968,6 +986,7 @@ def _build_chart(symbol, ohlc_rows, currency, label, use_gradient=False):
 
     ts = int(time.time())
     chart_path = f"/tmp/crypto_chart_{symbol}_{ts}.png"
+    _add_chart_watermark(fig)
     fig.tight_layout()
     fig.savefig(chart_path, dpi=150)
     plt.close(fig)
@@ -1333,6 +1352,7 @@ def _build_spaghetti_chart(series_by_symbol, label, output_dir="/tmp", use_gradi
     os.makedirs(output_dir, exist_ok=True)
     safe = "_".join(re.sub(r"[^A-Z0-9]+", "", sym.upper()) for sym in series_by_symbol)
     chart_path = os.path.join(output_dir, f"spaghetti_{safe}_{int(time.time())}.png")
+    _add_chart_watermark(fig)
     fig.tight_layout()
     fig.savefig(chart_path, dpi=150)
     plt.close(fig)

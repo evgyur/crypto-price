@@ -60,6 +60,8 @@ python3 {baseDir}/scripts/get_price_chart.py HYPE [duration]
 
 ## Command contract
 
+Every generated chart image must include the bottom-right public attribution watermark: `Telegram: @human20`. Keep this in both standard candlestick/volume charts and spaghetti comparison charts.
+
 Duration: минуты/часы/дни/недели/месяцы. Компактный формат `<число>[m|h|d|w|mo]`, без суффикса = часы. Примеры: `30m`, `2h`, `3h`, `12h`, `24h`, `2d`, `1w`, `2weeks`, `1mo`, `2months`; также поддерживаются раздельные формы вроде `1 week`, `2 months`, `30 мин`, `3 часа`, `1 месяц`. Месяц считается как 30 дней. Default: `24h`.
 
 ## Router Map

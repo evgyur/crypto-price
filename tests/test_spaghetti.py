@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+from matplotlib.figure import Figure
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "get_price_chart.py"
 
@@ -48,3 +50,45 @@ def test_spaghetti_chart_renderer_creates_png(tmp_path):
     assert path.exists()
     assert path.suffix == ".png"
     assert path.stat().st_size > 1000
+
+
+def test_watermark_is_drawn_on_standard_chart(monkeypatch):
+    calls = []
+
+    def fake_savefig(self, path, *args, **kwargs):
+        Path(path).write_bytes(b"png")
+
+    monkeypatch.setattr(gpc.time, "time", lambda: 1_234_567)
+    monkeypatch.setattr(Figure, "text", lambda self, *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(Figure, "savefig", fake_savefig, raising=False)
+
+    chart = gpc._build_chart(
+        "HYPE",
+        [(1_000, 10.0, 11.0, 9.0, 10.5), (2_000, 10.5, 12.0, 10.0, 11.5)],
+        "usd",
+        "1h",
+    )
+
+    assert chart is not None
+    watermark = next((args, kwargs) for args, kwargs in calls if args[2] == "Telegram: @human20")
+    args, kwargs = watermark
+    assert args[0] == 0.985
+    assert args[1] == 0.018
+    assert kwargs["ha"] == "right"
+    assert kwargs["va"] == "bottom"
+    assert kwargs["fontsize"] == 10
+
+
+def test_watermark_is_drawn_on_spaghetti_chart(monkeypatch, tmp_path):
+    calls = []
+
+    monkeypatch.setattr(Figure, "text", lambda self, *args, **kwargs: calls.append((args, kwargs)))
+
+    series = {
+        "HYPE": [(1_000, 0.0), (2_000, 10.0)],
+        "ASTER": [(1_000, 0.0), (2_000, -5.0)],
+    }
+    chart = gpc._build_spaghetti_chart(series, "6mo", output_dir=str(tmp_path))
+
+    assert chart is not None
+    assert any(args[2] == "Telegram: @human20" for args, _kwargs in calls)
