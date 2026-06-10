@@ -58,14 +58,24 @@ def _is_duration_token(tokens: list[str], idx: int) -> str | None:
 
 
 def _collect_args(argv: list[str]) -> list[str]:
-    args = list(argv)
     env_args = os.environ.get("HERMES_COMMAND_ARGS", "")
     if env_args.strip():
         try:
-            args.extend(shlex.split(env_args))
+            args = shlex.split(env_args)
         except ValueError:
-            args.extend(env_args.split())
-    return [a.strip() for a in args if a.strip()]
+            args = env_args.split()
+    else:
+        args = list(argv)
+    # ``append_args: true`` may pass the whole tail as one quoted argv item
+    # ("SILVER 6mo"). Split it here too so manual CLI/gateway paths agree.
+    expanded: list[str] = []
+    for arg in args:
+        try:
+            parts = shlex.split(arg)
+        except ValueError:
+            parts = arg.split()
+        expanded.extend(parts or [arg])
+    return [a.strip() for a in expanded if a.strip()]
 
 
 def _pick_symbol_duration(argv: list[str]) -> tuple[str, str]:
